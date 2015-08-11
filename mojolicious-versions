@@ -1,0 +1,211 @@
+#!/usr/bin/perl
+use Mojolicious::Lite;
+
+# load from git
+use ojo;
+my @lines = split /\n/, g("https://raw.githubusercontent.com/kraih/mojo/master/Changes")->body;
+
+
+# parse content
+my ($key, $last);
+my $buffer = [];
+my $struct = {};
+
+for (@lines){
+    chomp;
+
+    # blank lines
+    next if /^\s*$/;
+    
+    # parse headers
+    if(/^\d/){
+        my ($version, $date) = split /\s+/;
+        $key = $version;
+        $struct->{$key} = { version => $version, date => $date, changes => [] };
+        next
+    }
+
+    # parsing change descriptions
+    if(/^\s+-/){
+        s/^\s+-\s*//;
+        $last = $_;
+        push @{$struct->{$key}->{changes}}, $_;
+        next
+    }
+
+    s/^\s*/ /;
+    $last .= $_;
+    $struct->{$key}->{changes}->[-1] = $last;
+}
+
+#############################
+## Actions
+#############################
+get '/' => 'index';
+
+# mojolicious versions list
+get '/webapi/v1/versions' => sub {
+    my $c = shift;
+    $c->render( json => { 
+            dataset => [sort {$b cmp $a} keys(%{$struct})] || {} 
+        } 
+    );
+};
+
+# mojolicious version description
+get '/webapi/v1/version/*version' => sub {
+    my $c = shift;
+    my $v = $c->param('version') || 0;
+    $c->render( json => { 
+            dataset => $struct->{$v} || {} 
+        } 
+    );
+};
+
+app->start;
+
+#############################
+## Views
+#############################
+__DATA__
+
+@@ index.html.ep
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mojolicious Change Log</title>
+
+  <link rel="stylesheet" href="http://bootswatch.com/yeti/bootstrap.css">
+  <link href="//netdna.bootstrapcdn.com/font-awesome/4.0.3/css/font-awesome.min.css" rel="stylesheet" type="text/css" />
+
+  <script src="https://code.jquery.com/jquery.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.5/js/bootstrap.min.js"></script>
+
+  <style>
+    body {margin-top: 60px}
+  </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="row">
+            <div class="col-md-offset-3 col-md-6">
+                <div class="panel panel-default">
+                    <div class="panel-body">
+                        <h2>Mojolicious Versions Info</h2>
+
+                        <form method="post">
+                            <div class="form-group">
+                                <select id="ddl-version" name="ddl_version" class="form-control">
+                                    <option value="0">Select a version</option>
+                                </select>
+                            </div>
+                        </form>
+
+                        <div id="pnl-tag" style="display:none">
+                            <h3>GitHub Tag</h3>
+                            <small>
+                                <a href="#" id="lnk-tag" target="_blank"></a>&nbsp;
+                                <a href="#" id="lnk-tag-zip" target="_blank"> <i class="fa fa-cloud-download"></i> .zip</a>&nbsp;
+                                <a href="#" id="lnk-tag-tar" target="_blank"> <i class="fa fa-cloud-download"></i> .tar.gz</a>&nbsp;
+                            </small>
+                        </div>
+
+                    </div>
+
+                    <ul class="list-group" id="lst-changes"></ul>
+
+                </div>
+                
+                <!-- footer -->
+                <p class="text-center text-muted">
+                    <small>2015 &copy; Made with <strong>♥</strong> by <a href="http://bivee.com.br">Bivee</a></small></p>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        $(function(){
+            /**
+            * Global
+            */
+            var $versions     = $('#ddl-version');
+            var $change_list  = $('#lst-changes');
+            var $tag_link     = $('#lnk-tag');
+            var $tag_link_zip = $('#lnk-tag-zip');
+            var $tag_link_tar = $('#lnk-tag-tar');
+            
+            /**
+            * Startup version list loader
+            * @dvinciguerra
+            */
+            $.ajax({
+                url: '<%= url_for '/webapi/v1/versions' %>',
+                dataType: 'json',
+                success: function(data) {
+                    $.map(data.dataset, function(item){
+                         $versions.append('<option value="'+item+'">'+item+'</option>');
+                    })
+                },
+                error: function() {
+                    alert('We cannot load Mojolicious version file!')
+                }
+            });
+
+            /**
+            * Version dropdown change action event
+            * @dvinciguerra
+            */
+            $('#ddl-version').change(function(e){
+                var version = $(this).find('option:selected').val();
+
+                // show tag panel
+                if(version > 0){ 
+                    // setting link
+                    var link = 'https://github.com/kraih/mojo/releases/tag/v' + version;
+                    $tag_link.html(link);
+                    $tag_link.attr('href', link);
+                    $tag_link_zip.attr('href', 'https://github.com/kraih/mojo/archive/v'+version+'.zip');
+                    $tag_link_tar.attr('href', 'https://github.com/kraih/mojo/archive/v'+version+'.tar.gz');
+
+                    $('#pnl-tag').show(); 
+                } else { 
+                    $('#pnl-tag').hide(); 
+                }
+
+                
+
+                // loading informations
+                $.ajax({
+                    url: '<%= url_for '/webapi/v1/version' %>/' + version,
+                    dataType: 'json',
+                    success: function(data) {
+                        $change_list.html('');
+                        $.map(data.dataset.changes, function(item){
+                            // setting classes for removed and deprecated
+                            var highlight = '';
+                            if(item.match(/Deprecated/i)){
+                                highlight = 'list-group-item-danger';
+                                item = item.replace(/Deprecated/i, '<code>DEPRECATED</code>')
+                            }
+                            if(item.match(/Remove/i)) highlight = 'list-group-item-warning';
+
+                            $change_list.append('<li class="list-group-item '+highlight+'">'+item+'</li>');
+                        })
+                    },
+                    error: function() {
+                        alert('Error trying load version informations!')
+                    }
+                });
+                return false;
+            });
+        });
+    </script>
+
+
+</body>
+</html>
+
+
